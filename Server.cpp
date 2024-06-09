@@ -1,268 +1,300 @@
 #include <iostream>
-#include <map>
-#include <mutex>
-#include <string>
-#include <vector>
-#include <memory>
-#include <sstream>
 #include <winsock2.h>
-#include <ws2tcpip.h>
+#include <windows.h>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include <thread>
+#include <algorithm>
+#include <unordered_map>
+#include <string>
 
-// 定义最大缓冲区大小
-#define MAX_BUFFER_SIZE 4096
+#define BUF_SIZE 4096
 
-// 用户结构体，存储用户名和对应的套接字
-struct User {
-    std::string username;
-    SOCKET socket{};
+struct ClientInfo {
+    int id{};
+    SOCKET sclient{};
+    sockaddr_in addrClient{};
+    OVERLAPPED overlapped{};
+    char buf[BUF_SIZE]{};
+    std::string username;  // 新增用户名字段
 };
 
-// 消息结构体，存储消息发送者、接收者和内容
-struct Message {
-    std::string from;
-    std::vector<std::string> to;
-    std::string content;
-};
+std::mutex connectionMutex;
+std::atomic<int> connectionCount(0);
+std::atomic<int> nextClientId(1);
+std::vector<ClientInfo *> clients;
+std::unordered_map<std::string, ClientInfo *> userMap;  // 用户名与ClientInfo的映射
 
-// 重叠结构体
-struct OverlappedEx {
-    WSAOVERLAPPED overlapped;
-    WSABUF wsabuf;
-    char buffer[MAX_BUFFER_SIZE];
-    int operation;  // 用于区分操作类型，例如接收或发送
-};
+// 函数声明
+void ProcessClient(ClientInfo *clientInfo);
 
-// 发送消息给指定套接字
-void sendMessage(SOCKET socket, const std::string &message);
+DWORD WINAPI KeyboardThread(LPVOID);
 
-// 全局用户映射，键为用户名，值为User结构体
-std::map<std::string, User> users;  // key: username, value: User
-// 用于保护用户映射的互斥锁
-std::mutex usersMutex;
+void Cleanup();
 
-/**
- * 创建一个新的OverlappedEx结构体
- * 使用智能指针管理OverlappedEx的生命周期
- * @return 新创建的OverlappedEx指针
- */
-std::unique_ptr<OverlappedEx> createOverlappedEx() {
-    auto overlappedEx = std::make_unique<OverlappedEx>();
-    ZeroMemory(&(overlappedEx->overlapped), sizeof(WSAOVERLAPPED));
-    overlappedEx->wsabuf.buf = overlappedEx->buffer;
-    overlappedEx->wsabuf.len = MAX_BUFFER_SIZE;
-    overlappedEx->operation = 1;  // 设置为接收操作
-    return overlappedEx;
-}
-
-/**
- * 创建一个新的套接字并将其与完成端口关联
- * @param completionPort 完成端口句柄
- * @return 新创建的套接字，错误时返回INVALID_SOCKET
- */
-SOCKET createSocketAndAssociateWithCompletionPort(HANDLE completionPort) {
-    SOCKET clientSocket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    if (clientSocket == INVALID_SOCKET) {
-        std::cerr << "Error at WSASocket(): " << WSAGetLastError() << std::endl;
-        return INVALID_SOCKET;
-    }
-
-    if (CreateIoCompletionPort((HANDLE) clientSocket, completionPort, (ULONG_PTR) clientSocket, 0) == nullptr) {
-        std::cerr << "Error in associating socket with completion port: " << GetLastError() << std::endl;
-        closesocket(clientSocket);
-        return INVALID_SOCKET;
-    }
-    return clientSocket;
-}
-
-/**
- * 解析接收到的数据并根据命令执行相应操作
- * @param overlappedEx 接收操作对应的过重叠结构体
- * @param completionKey 完成端口的关联值
- */
-void parseAndHandleMessage(OverlappedEx *overlappedEx, ULONG_PTR completionKey) {
-    std::string data(overlappedEx->buffer);
-    std::istringstream stream(data);
-    std::string command;
-    stream >> command;
-
-    if (command == "REGISTER") {
-        std::string username;
-        stream >> username;
-        {
-            std::lock_guard<std::mutex> lock(usersMutex);
-            users[username] = {username, (SOCKET) completionKey};
-        }
-        std::cout << "New user registered: " << username << std::endl;
-    } else if (command == "MESSAGE") {
-        std::string username, message;
-        stream >> username;
-        getline(stream, message);  // 获取剩余部分作为消息
-        std::lock_guard<std::mutex> lock(usersMutex);
-        if (users.find(username) != users.end()) {
-            sendMessage(users[username].socket, message);
-        }
-    }
-}
-
-// 发送消息函数
-void sendMessage(SOCKET socket, const std::string &message) {
-    auto sendOverlappedEx = createOverlappedEx();
-    memcpy(sendOverlappedEx->buffer, message.c_str(), message.length());
-    sendOverlappedEx->wsabuf.len = message.length();
-    sendOverlappedEx->operation = 2;  // 设置为发送操作
-    DWORD sentBytes = 0;
-    int result = WSASend(socket, &(sendOverlappedEx->wsabuf), 1, &sentBytes, 0, &(sendOverlappedEx->overlapped), nullptr);
-    if (result == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-        std::cerr << "WSASend failed: " << WSAGetLastError() << std::endl;
-    }
-}
-
-/**
- * 初始化WinSock库
- * @return 初始化结果，0表示成功
- */
-int initializeWinSock() {
+int main() {
     WSADATA wsaData;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (result != 0) {
-        std::cerr << "WSAStartup failed: " << result << std::endl;
-        return result;
+    SOCKET sServer;
+    int retVal;
+
+    // 初始化Winsock
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        std::cerr << "WSAStartup failed !" << std::endl;
+        return 1;
     }
+
+    // 创建服务器套接字
+    sServer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sServer == INVALID_SOCKET) {
+        std::cerr << "Socket failed !" << std::endl;
+        WSACleanup();
+        return -1;
+    }
+
+    // 设置服务器地址信息并绑定
+    sockaddr_in addrServ{};
+    addrServ.sin_family = AF_INET;
+    int port = 9990;
+    addrServ.sin_port = htons(port);
+    addrServ.sin_addr.S_un.S_addr = INADDR_ANY;
+
+    retVal = bind(sServer, (sockaddr *) &addrServ, sizeof(addrServ));
+    if (retVal == SOCKET_ERROR) {
+        std::cerr << "Bind failed !" << std::endl;
+        closesocket(sServer);
+        WSACleanup();
+        return -1;
+    }
+
+    // 开始监听
+    retVal = listen(sServer, SOMAXCONN);
+    if (retVal == SOCKET_ERROR) {
+        std::cerr << "Listen failed !" << std::endl;
+        closesocket(sServer);
+        WSACleanup();
+        return -1;
+    }
+
+    // 创建键盘输入线程
+    CreateThread(nullptr, 0, KeyboardThread, nullptr, 0, nullptr);
+
+    std::cout << "Server is listening on port " << port << " ..." << std::endl;
+
+    // 循环等待客户端连接
+    while (true) {
+        sockaddr_in addrClient{};
+        int addrClientLen = sizeof(addrClient);
+        SOCKET sClient = accept(sServer, (sockaddr *) &addrClient, &addrClientLen);
+        if (sClient == INVALID_SOCKET) {
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                std::cerr << "Accept failed with error: " << err << std::endl;
+                break;
+            }
+            Sleep(100);
+            continue;
+        }
+
+        // 为新客户端分配内存
+        auto *clientInfo = new ClientInfo;
+        clientInfo->sclient = sClient;
+        clientInfo->addrClient = addrClient;
+        clientInfo->id = nextClientId++;
+        ZeroMemory(&clientInfo->overlapped, sizeof(clientInfo->overlapped));
+
+        // 创建线程处理客户端请求
+        std::thread(ProcessClient, clientInfo).detach();
+    }
+
+    // 服务结束后的清理工作
+    Cleanup();
     return 0;
 }
 
-/**
- * 创建服务器套接字并绑定到指定端口
- * @param port 服务器端口
- * @return 创建的服务器套接字，错误时返回INVALID_SOCKET
- */
-SOCKET createServerSocket(const char *port) {
-    struct addrinfo hints{}, *result = nullptr;
-    ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-    hints.ai_flags = AI_PASSIVE;
-
-    if (getaddrinfo(nullptr, port, &hints, &result) != 0) {
-        std::cerr << "getaddrinfo failed." << std::endl;
-        WSACleanup();
-        return INVALID_SOCKET;
+void ProcessClient(ClientInfo *clientInfo) {
+    // 创建事件对象并关联到OVERLAPPED结构体
+    clientInfo->overlapped.hEvent = WSACreateEvent();
+    if (clientInfo->overlapped.hEvent == nullptr) {
+        std::cerr << "WSACreateEvent failed with error: " << WSAGetLastError() << std::endl;
+        delete clientInfo;
+        return;
     }
 
-    SOCKET listenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (listenSocket == INVALID_SOCKET) {
-        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
-        freeaddrinfo(result);
-        WSACleanup();
-        return INVALID_SOCKET;
+    // 客户端连接信息
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex);
+        connectionCount++;
+        std::cout << "Client [" << clientInfo->id << "] connected from "
+                  << inet_ntoa(clientInfo->addrClient.sin_addr) << ":" << ntohs(clientInfo->addrClient.sin_port)
+                  << std::endl;
+        clients.push_back(clientInfo);
+        std::cout << "Total connections: " << connectionCount.load() << std::endl;
     }
 
-    if (bind(listenSocket, result->ai_addr, (int) result->ai_addrlen) == SOCKET_ERROR) {
-        std::cerr << "Bind failed with error: " << WSAGetLastError() << std::endl;
-        freeaddrinfo(result);
-        closesocket(listenSocket);
-        WSACleanup();
-        return INVALID_SOCKET;
-    }
-
-    freeaddrinfo(result);
-    if (listen(listenSocket, SOMAXCONN) == SOCKET_ERROR) {
-        std::cerr << "Listen failed with error: " << WSAGetLastError() << std::endl;
-        closesocket(listenSocket);
-        WSACleanup();
-        return INVALID_SOCKET;
-    }
-    return listenSocket;
-}
-
-/**
- * 创建完成端口并将其与服务器套接字关联
- * @param listenSocket 服务器套接字
- * @param numberOfConcurrentThreads 完成端口可处理的并发线程数
- * @return 创建的完成端口句柄，错误时返回nullptr
- */
-HANDLE createCompletionPort(SOCKET listenSocket, int numberOfConcurrentThreads) {
-    HANDLE completionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, numberOfConcurrentThreads);
-    if (completionPort == nullptr) {
-        std::cerr << "CreateIoCompletionPort failed: " << GetLastError() << std::endl;
-        closesocket(listenSocket);
-        WSACleanup();
-        return nullptr;
-    }
-
-    if (CreateIoCompletionPort((HANDLE) listenSocket, completionPort, (ULONG_PTR) 0, 0) == nullptr) {
-        std::cerr << "Error in associating socket with completion port: " << GetLastError() << std::endl;
-        closesocket(listenSocket);
-        CloseHandle(completionPort);
-        WSACleanup();
-        return nullptr;
-    }
-    return completionPort;
-}
-
-/**
- * 服务器主循环，处理完成端口上的事件
- * @param completionPort 服务器的完成端口句柄
- */
-[[noreturn]] void serverLoop(HANDLE completionPort) {
-    DWORD bytesTransferred;
-    ULONG_PTR completionKey;
-    OverlappedEx *overlappedEx;
-    BOOL result;
-
+    // 进入通信循环
     while (true) {
-        result = GetQueuedCompletionStatus(completionPort, &bytesTransferred, &completionKey,
-                                           (LPOVERLAPPED *) &overlappedEx, INFINITE);
-        if (result == FALSE) {
-            std::cerr << "GetQueuedCompletionStatus failed: " << GetLastError() << std::endl;
-            continue;
-        }
+        DWORD bytesReceived;
+        DWORD flags = 0;
+        WSABUF dataBuf;
+        dataBuf.buf = clientInfo->buf;
+        dataBuf.len = BUF_SIZE;
 
-        if (overlappedEx == nullptr) {
-            continue;
-        }
-
-        if (overlappedEx->operation == 1) { // 假设1表示接收
-            if (bytesTransferred > 0) {
-                overlappedEx->buffer[bytesTransferred] = '\0'; // 确保字符串终止
-                parseAndHandleMessage(overlappedEx, completionKey);
+        int retVal = WSARecv(clientInfo->sclient, &dataBuf, 1, &bytesReceived, &flags, &clientInfo->overlapped,
+                             nullptr);
+        if (retVal == SOCKET_ERROR) {
+            int err = WSAGetLastError();
+            if (err != WSA_IO_PENDING) {
+                std::cerr << "WSARecv failed with error: " << err << std::endl;
+                break;
             }
         }
 
-        // 重新投递接收请求
-        ZeroMemory(&(overlappedEx->overlapped), sizeof(WSAOVERLAPPED));
-        overlappedEx->wsabuf.len = MAX_BUFFER_SIZE;
-        DWORD flags = 0;
-        int WSARecvResult = WSARecv((SOCKET) completionKey, &(overlappedEx->wsabuf), 1, &bytesTransferred, &flags,
-                             &(overlappedEx->overlapped), nullptr);
-        if (WSARecvResult == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-            std::cerr << "WSARecv failed: " << WSAGetLastError() << std::endl;
+        // 等待接收完成
+        DWORD waitRet = WSAWaitForMultipleEvents(1, &clientInfo->overlapped.hEvent, TRUE, INFINITE, FALSE);
+        if (waitRet == WSA_WAIT_FAILED) {
+            std::cerr << "WSAWaitForMultipleEvents failed with error: " << WSAGetLastError() << std::endl;
+            break;
         }
+
+        // 检查接收操作是否已完成
+        WSAGetOverlappedResult(clientInfo->sclient, &clientInfo->overlapped, &bytesReceived, FALSE, &flags);
+
+        // 处理接收到的数据
+        if (bytesReceived > 0) {
+            clientInfo->buf[bytesReceived] = '\0';
+            std::cout << "Received from [" << clientInfo->id << "][" << inet_ntoa(clientInfo->addrClient.sin_addr)
+                      << ":" << ntohs(clientInfo->addrClient.sin_port) << "]: " << clientInfo->buf << std::endl;
+
+            // 解析消息并处理
+            char *token;
+            char *context = nullptr;
+            token = strtok_s(clientInfo->buf, " ", &context);
+            std::string cmd(token);
+
+            if (cmd == "REGISTER") {
+                token = strtok_s(nullptr, " ", &context); // 第二段
+                if (strcmp(token, "SERVER") == 0) { // 验证是否为 "SERVER"
+                    token = strtok_s(nullptr, " ", &context); // 用户名
+                    if (token != nullptr) {
+                        std::string username(token);
+                        clientInfo->username = username;
+                        {
+                            std::lock_guard<std::mutex> lock(connectionMutex);
+                            userMap[username] = clientInfo;
+                            std::cout << "User registered: " << username << std::endl;
+                            // 通知客户端注册成功
+                            send(clientInfo->sclient, "Server: Registered.", 19, 0);
+                            // 向所有在线用户发送在线用户列表
+                            std::string userList = "Server: Online users: ";
+                            for (const auto &pair: userMap) {
+                                userList += pair.first + " ";
+                            }
+                            for (auto client: clients) {
+                                send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                            }
+                        }
+                    }
+                } else {
+                    std::cerr << "Invalid registration command format." << std::endl;
+                    // 通知客户端注册失败
+                    send(clientInfo->sclient, "Server: Invalid registration command format.", 41, 0);
+                }
+            } else if (cmd == "MESSAGE") {
+                token = strtok_s(nullptr, " ", &context);
+                std::string target(token);
+                std::string message(context);
+
+                if (target == "SERVER") {
+                    std::cout << "Message to SERVER: " << message << std::endl;
+                } else {
+                    std::lock_guard<std::mutex> lock(connectionMutex);
+                    if (userMap.find(target) != userMap.end()) {
+                        //在消息前加上发送者的用户名
+                        message = clientInfo->username + ": " + context;
+                        send(userMap[target]->sclient, message.c_str(), (int) message.length(), 0);
+                        // 通知客户端消息已发送
+                        send(clientInfo->sclient, "Server: Message sent.", 21, 0);
+                    } else {
+                        std::cout << "User not found: " << target << std::endl;
+                        // 通知客户端用户不存在
+                        send(clientInfo->sclient, "Server: User not found.", 23, 0);
+                    }
+                }
+            } else if (cmd == "REMOVE") {
+                {
+                    std::lock_guard<std::mutex> lock(connectionMutex);
+                    userMap.erase(clientInfo->username);
+                    std::cout << "User removed: " << clientInfo->username << std::endl;
+                    // 向所有在线用户发送在线用户列表
+                    std::string userList = "Server: Online users: ";
+                    for (const auto &pair: userMap) {
+                        userList += pair.first + " ";
+                    }
+                    for (auto client: clients) {
+                        send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                    }
+                }
+            }
+        } else {
+            // 客户端断开连接
+            std::cout << "Client [" << clientInfo->id << "] disconnected." << std::endl;
+            {
+                std::lock_guard<std::mutex> lock(connectionMutex);
+                connectionCount--;
+                clients.erase(std::remove(clients.begin(), clients.end(), clientInfo), clients.end());
+                userMap.erase(clientInfo->username);
+                std::cout << "Total connections: " << connectionCount.load() << std::endl;
+                // 向所有在线用户发送在线用户列表
+                std::string userList = "Server: Online users: ";
+                for (const auto &pair: userMap) {
+                    userList += pair.first + " ";
+                }
+                for (auto client: clients) {
+                    send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                }
+            }
+            break;
+        }
+
+        // 重置事件对象，准备下一次接收
+        WSAResetEvent(clientInfo->overlapped.hEvent);
     }
+
+    // 关闭事件对象
+    WSACloseEvent(clientInfo->overlapped.hEvent);
+
+    // 关闭套接字并清理内存
+    closesocket(clientInfo->sclient);
+
+    delete clientInfo;
 }
 
-int main() {
-    int result = initializeWinSock();
-    if (result != 0) {
-        return 1;
+DWORD WINAPI KeyboardThread(LPVOID) {
+    char input[BUF_SIZE];
+    while (true) {
+        std::cin.getline(input, BUF_SIZE);
+        if (strcmp(input, "exit") == 0) break;
+
+        std::lock_guard<std::mutex> lock(connectionMutex);
+        for (auto client: clients) {
+            std::cout << "Sending to [" << client->id << "]: " << input << std::endl;
+            send(client->sclient, input, (int) strlen(input), 0);
+        }
     }
-
-    SOCKET serverSocket = createServerSocket("12345");
-    if (serverSocket == INVALID_SOCKET) {
-        return 1;
-    }
-
-    HANDLE completionPort = createCompletionPort(serverSocket, 0);
-    if (completionPort == nullptr) {
-        return 1;
-    }
-
-    serverLoop(completionPort);
-
-    // 清理资源
-    closesocket(serverSocket);
-    CloseHandle(completionPort);
-    WSACleanup();
     return 0;
+}
+
+void Cleanup() {
+    // 关闭所有客户端连接
+    std::lock_guard<std::mutex> lock(connectionMutex);
+    for (auto client: clients) {
+        closesocket(client->sclient);
+        delete client;
+    }
+    clients.clear();
+    userMap.clear();  // 清理用户映射
+
+    // 关闭服务器套接字
+    WSACleanup();
 }

@@ -1,93 +1,112 @@
 #include <iostream>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <string>
+#include <thread>
+#include <vector>
+#include <atomic>
+#include <Winsock2.h>
 
+#pragma comment(lib, "WS2_32.lib")
 
-int initializeWinSock() {
-    WSADATA wsaData;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (result != 0) {
-        std::cerr << "WSAStartup failed: " << result << std::endl;
-        return result;
+constexpr size_t BUF_SIZE = 4096;
+std::atomic<bool> continueReceiving{true};
+
+void receiveMessages(SOCKET sHost) {
+    std::vector<char> buf(BUF_SIZE, 0);
+    int retVal;
+
+    while (continueReceiving) {
+        retVal = recv(sHost, buf.data(), BUF_SIZE - 1, 0);
+        if (retVal > 0) {
+            buf[retVal] = '\0';
+            std::cout << buf.data() << std::endl;
+        } else if (retVal == 0) {
+            std::cout << "Connection closed by the server." << std::endl;
+            break;
+        } else {
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                std::cerr << "recv failed with error: " << err << std::endl;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
-    std::cout << "WinSock initialized successfully." << std::endl;
+}
+
+int initializeSocket(SOCKET &sHost, const std::string &ip, const std::string &port) {
+    WSADATA wsd;
+    if (WSAStartup(MAKEWORD(2, 2), &wsd) != 0) {
+        std::cerr << "WSAStartup failed!" << std::endl;
+        return -1;
+    }
+
+    sHost = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sHost == INVALID_SOCKET) {
+        std::cerr << "socket creation failed!" << std::endl;
+        WSACleanup();
+        return -1;
+    }
+
+    SOCKADDR_IN servAddr;
+    servAddr.sin_family = AF_INET;
+    servAddr.sin_addr.s_addr = inet_addr(ip.c_str());
+    servAddr.sin_port = htons(static_cast<u_short>(std::stoi(port)));
+
+    if (connect(sHost, reinterpret_cast<LPSOCKADDR>(&servAddr), sizeof(servAddr)) == SOCKET_ERROR) {
+        std::cerr << "Connect failed!" << std::endl;
+        closesocket(sHost);
+        WSACleanup();
+        return -1;
+    }
+
+    std::cout << "Connected to server successfully." << std::endl;
     return 0;
 }
 
-SOCKET connectToServer(const char* serverIP, const char* serverPort) {
-    struct addrinfo hints{}, *result = nullptr;
-    ZeroMemory(&hints, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    int status = getaddrinfo(serverIP, serverPort, &hints, &result);
-    if (status != 0) {
-        std::cerr << "getaddrinfo failed: " << status << std::endl;
-        WSACleanup();
-        return INVALID_SOCKET;
-    }
-
-    SOCKET connectSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (connectSocket == INVALID_SOCKET) {
-        std::cerr << "Error at socket(): " << WSAGetLastError() << std::endl;
-        freeaddrinfo(result);
-        WSACleanup();
-        return INVALID_SOCKET;
-    }
-
-    if (connect(connectSocket, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
-        std::cerr << "Unable to connect to server: " << WSAGetLastError() << std::endl;
-        closesocket(connectSocket);
-        freeaddrinfo(result);
-        WSACleanup();
-        return INVALID_SOCKET;
-    }
-
-    std::cout << "Successfully connected to server at " << serverIP << ":" << serverPort << std::endl;
-    freeaddrinfo(result);
-    return connectSocket;
-}
-
-void sendAndReceiveData(SOCKET connectSocket) {
-    const char* sendMessage = "Hello, Server!";
-    int bytesSent = send(connectSocket, sendMessage, (int)strlen(sendMessage), 0);
-    if (bytesSent == SOCKET_ERROR) {
-        std::cerr << "Send failed: " << WSAGetLastError() << std::endl;
-        closesocket(connectSocket);
-        WSACleanup();
-        return;
-    }
-
-    std::cout << "Message sent to server: " << sendMessage << std::endl;
-
-    char recvBuffer[512];
-    int bytesReceived = recv(connectSocket, recvBuffer, 512, 0);
-    if (bytesReceived > 0) {
-        recvBuffer[bytesReceived] = '\0'; // Ensure null termination
-        std::cout << "Received message from server: " << recvBuffer << std::endl;
-    } else if (bytesReceived == 0) {
-        std::cout << "Connection closed by server.\n";
-    } else {
-        std::cerr << "recv failed: " << WSAGetLastError() << std::endl;
-    }
-}
-
-int main() {
-    int result = initializeWinSock();
-    if (result != 0) {
-        return 1;
-    }
-
-    SOCKET connectSocket = connectToServer("127.0.0.1", "12345");  // 使用服务器的IP地址和端口号
-    if (connectSocket == INVALID_SOCKET) {
-        return 1;
-    }
-
-    sendAndReceiveData(connectSocket);
-
-    // 清理资源
-    closesocket(connectSocket);
+void cleanup(SOCKET sHost) {
+    closesocket(sHost);
     WSACleanup();
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <Server IP> <Port>" << std::endl;
+        return 1;
+    }
+
+    SOCKET sHost;
+    if (initializeSocket(sHost, argv[1], argv[2]) != 0) {
+        return 1;
+    }
+
+    std::string username;
+    std::cout << "Enter your username: ";
+    std::cin >> username;
+    std::string registerMessage = "REGISTER SERVER " + username;
+    send(sHost, registerMessage.c_str(), (int) registerMessage.size(), 0);
+
+    std::thread receiverThread(receiveMessages, sHost);
+
+    std::string input;
+    std::cin.ignore();  // 忽略之前输入的换行符
+    std::cout << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::cout << std::endl;
+    std::cout << "Enter message or 'exit' to quit:" << std::endl;
+    while (true) {
+        std::getline(std::cin, input);
+        if (input == "exit") {
+            continueReceiving = false;  // 告诉接收线程停止接收消息
+            std::string removeMessage = "REMOVE SERVER " + username;
+            send(sHost, removeMessage.c_str(), (int) removeMessage.size(), 0);  // 发送移除用户的消息
+            break;
+        } else {
+            std::string message = "MESSAGE " + input;
+            send(sHost, message.c_str(), (int) message.size(), 0);
+        }
+    }
+
+    receiverThread.join();
+    cleanup(sHost);
     return 0;
 }
