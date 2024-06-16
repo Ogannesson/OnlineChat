@@ -112,6 +112,12 @@ int main(int argc, char **argv) {
             std::string groupMessage = "GROUP_MESSAGE " + groupName + " " + message;
             send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
         }
+        //查看群组成员
+        else if (input.substr(0, 5) == "check") {
+            std::string groupName = input.substr(input.find(' ')+1); // 获取第一个空格前的部分
+            std::string groupMessage = "GROUP_CHECK " + groupName;
+            send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
+        }
         else if (input.substr(0, 4) == "join") {
             std::string groupName = input; // 假设输入格式为 "join group_name"
             std::string joinGroupMessage = "JOIN_GROUP " + groupName;

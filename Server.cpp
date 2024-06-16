@@ -274,6 +274,24 @@ void ProcessClient(ClientInfo *clientInfo) {
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
             }
+            else if(cmd =="GROUP_CHECK"){
+                //查看群组成员
+                token = strtok_s(nullptr, " ", &context);
+                std::cout<<token<<std::endl;
+                std::string groupName(token);
+                //查看群组是否存在并输出成员名称
+                if (groupMap.find(groupName) != groupMap.end()) {
+                    std::string groupMembers = "Server: Group members: ";
+                    for (auto member: groupMap[groupName]) {
+                        groupMembers += member->username + " ";
+                        send(clientInfo->sclient, groupMembers.c_str(), (int) groupMembers.length(), 0);
+                    }
+                } else {
+                    std::cout << "Group not found: " << groupName << std::endl;
+                    // 通知客户端群组不存在
+                    send(clientInfo->sclient, "Server: Group not found.", 23, 0);
+                }
+            }
             else if (cmd == "GROUP_MESSAGE"){
                 //群组消息
                 token = strtok_s(nullptr, " ", &context);
