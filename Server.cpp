@@ -284,8 +284,8 @@ void ProcessClient(ClientInfo *clientInfo) {
                     std::string groupMembers = "Server: Group members: ";
                     for (auto member: groupMap[groupName]) {
                         groupMembers += member->username + " ";
-                        send(clientInfo->sclient, groupMembers.c_str(), (int) groupMembers.length(), 0);
                     }
+                    send(clientInfo->sclient, groupMembers.c_str(), (int) groupMembers.length(), 0);
                 } else {
                     std::cout << "Group not found: " << groupName << std::endl;
                     // 通知客户端群组不存在
@@ -294,6 +294,7 @@ void ProcessClient(ClientInfo *clientInfo) {
             }
             else if (cmd == "GROUP_MESSAGE"){
                 //群组消息
+                token = strtok_s(nullptr, " ", &context);
                 token = strtok_s(nullptr, " ", &context);
                 std::cout<<token<<std::endl;
                 std::string groupName(token);

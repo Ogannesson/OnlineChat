@@ -108,11 +108,10 @@ int main(int argc, char **argv) {
         }
         else if (input.substr(0, 5) == "group") {
             std::string groupName = input.substr(0, input.find(' ')); // 获取第一个空格前的部分
-            std::string message = input.substr(input.find(' ') + 1); // 获取第一个空格后的部分
+            std::string message = input.substr(input.find(' '),input.size());
             std::string groupMessage = "GROUP_MESSAGE " + groupName + " " + message;
             send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
         }
-        //查看群组成员
         else if (input.substr(0, 5) == "check") {
             std::string groupName = input.substr(input.find(' ')+1); // 获取第一个空格前的部分
             std::string groupMessage = "GROUP_CHECK " + groupName;
