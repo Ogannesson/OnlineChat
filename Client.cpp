@@ -100,7 +100,24 @@ int main(int argc, char **argv) {
             std::string removeMessage = "REMOVE SERVER " + username;
             send(sHost, removeMessage.c_str(), (int) removeMessage.size(), 0);  // 发送移除用户的消息
             break;
-        } else {
+        }
+        else if (input.substr(0, 6) == "create") {
+            std::string groupName = input.substr(input.find(' ') + 1); // 获取第一个空格后的部分
+            std::string createGroupMessage = "CREATE_GROUP " + groupName;
+            send(sHost, createGroupMessage.c_str(), (int) createGroupMessage.size(), 0);
+        }
+        else if (input.substr(0, 5) == "group") {
+            std::string groupName = input.substr(0, input.find(' ')); // 获取第一个空格前的部分
+            std::string message = input.substr(input.find(' ') + 1); // 获取第一个空格后的部分
+            std::string groupMessage = "GROUP_MESSAGE " + groupName + " " + message;
+            send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
+        }
+        else if (input.substr(0, 4) == "join") {
+            std::string groupName = input; // 假设输入格式为 "join group_name"
+            std::string joinGroupMessage = "JOIN_GROUP " + groupName;
+            send(sHost, joinGroupMessage.c_str(), (int) joinGroupMessage.size(), 0);
+        }
+        else {
             std::string message = "MESSAGE " + input;
             send(sHost, message.c_str(), (int) message.size(), 0);
         }
