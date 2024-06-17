@@ -12,6 +12,19 @@ constexpr size_t BUF_SIZE = 4096;
 // 使用原子类型控制接收循环的继续或退出
 std::atomic<bool> continueReceiving{true};
 
+void SendToServer(SOCKET sclient, const char *data, int len, int i) {
+    WSABUF buffer;
+    buffer.buf = (CHAR*)data;
+    buffer.len = len;
+    DWORD bytesSent;
+    OVERLAPPED ol;
+    ZeroMemory(&ol, sizeof(ol));
+    int result = WSASend(sclient, &buffer, 1, &bytesSent, 0, &ol, NULL);
+    if (result == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
+        std::cerr << "WSASend failed with error: " << WSAGetLastError() << std::endl;
+    }
+}
+
 /**
  * 接收消息线程函数
  * @param sHost 服务器套接字
@@ -108,7 +121,7 @@ int main(int argc, char **argv) {
     std::cout << "Enter your username: ";
     std::cin >> username;
     std::string registerMessage = "REGISTER SERVER " + username;
-    send(sHost, registerMessage.c_str(), (int) registerMessage.size(), 0);
+    SendToServer(sHost, registerMessage.c_str(), (int) registerMessage.size(), 0);
 
     // 启动接收消息的线程
     std::thread receiverThread(receiveMessages, sHost);
@@ -124,31 +137,31 @@ int main(int argc, char **argv) {
         if (input == "exit") {
             continueReceiving = false;  // 告诉接收线程停止接收消息
             std::string removeMessage = "REMOVE SERVER " + username;
-            send(sHost, removeMessage.c_str(), (int) removeMessage.size(), 0);  // 发送移除用户的消息
+            SendToServer(sHost, removeMessage.c_str(), (int) removeMessage.size(), 0);  // 发送移除用户的消息
             break;
         } else if (input.substr(0, 6) == "CREATE") {
             std::string groupName = input.substr(input.find(' ') + 1);
             std::string createGroupMessage = "CREATE_GROUP " + groupName;
-            send(sHost, createGroupMessage.c_str(), (int) createGroupMessage.size(), 0);
+            SendToServer(sHost, createGroupMessage.c_str(), (int) createGroupMessage.size(), 0);
         } else if (input.substr(0, 5) == "GROUP") {
             std::string groupName = input.substr(0, input.find(' '));
             std::string message = input.substr(input.find(' '), input.size());
             std::string groupMessage = "GROUP_MESSAGE ";
             groupMessage.append(groupName).append(" ").append(message);
-            send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
+            SendToServer(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
         } else if (input.substr(0, 5) == "CHECK") {
             std::string groupName = input.substr(input.find(' ') + 1);
             std::string groupMessage = "GROUP_CHECK " + groupName;
-            send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
+            SendToServer(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
         } else if (input.substr(0, 4) == "JOIN") {
             const std::string &groupName = input;
             std::string joinGroupMessage = "JOIN_GROUP " + groupName;
-            send(sHost, joinGroupMessage.c_str(), (int) joinGroupMessage.size(), 0);
+            SendToServer(sHost, joinGroupMessage.c_str(), (int) joinGroupMessage.size(), 0);
         } else if (input.empty()) {
             std::cout << "Invalid input!" << std::endl;
         } else {
             std::string message = "MESSAGE " + input;
-            send(sHost, message.c_str(), (int) message.size(), 0);
+            SendToServer(sHost, message.c_str(), (int) message.size(), 0);
         }
     }
 

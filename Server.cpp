@@ -46,6 +46,19 @@ DWORD WINAPI KeyboardThread(LPVOID);
 // 清理函数，用于关闭套接字和释放资源
 void Cleanup();
 
+void SendToClient(SOCKET sclient, const char *data, int len, int i) {
+    WSABUF buffer;
+    buffer.buf = (CHAR*)data;
+    buffer.len = len;
+    DWORD bytesSent;
+    OVERLAPPED ol;
+    ZeroMemory(&ol, sizeof(ol));
+    int result = WSASend(sclient, &buffer, 1, &bytesSent, 0, &ol, NULL);
+    if (result == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
+        std::cerr << "WSASend failed with error: " << WSAGetLastError() << std::endl;
+    }
+}
+
 int main() {
     WSADATA wsaData;
     SOCKET sServer;
@@ -202,21 +215,21 @@ void ProcessClient(ClientInfo *clientInfo) {
                             userMap[username] = clientInfo;
                             std::cout << "User registered: " << username << std::endl;
                             // 通知客户端注册成功
-                            send(clientInfo->sclient, "Server: Registered.", 19, 0);
+                            SendToClient(clientInfo->sclient, "Server: Registered.", 19, 0);
                             // 向所有在线用户发送在线用户列表
                             std::string userList = "Server: Online users: ";
                             for (const auto &pair: userMap) {
                                 userList += pair.first + " ";
                             }
                             for (auto client: clients) {
-                                send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                                SendToClient(client->sclient, userList.c_str(), (int) userList.length(), 0);
                             }
                         }
                     }
                 } else {
                     std::cerr << "Invalid registration command format." << std::endl;
                     // 通知客户端注册失败
-                    send(clientInfo->sclient, "Server: Invalid registration command format.", 41, 0);
+                    SendToClient(clientInfo->sclient, "Server: Invalid registration command format.", 41, 0);
                 }
             } else if (cmd == "MESSAGE") {// 消息发送命令处理
                 token = strtok_s(nullptr, " ", &context);
@@ -229,13 +242,13 @@ void ProcessClient(ClientInfo *clientInfo) {
                     if (userMap.find(target) != userMap.end()) {
                         //在消息前加上发送者的用户名
                         message = clientInfo->username + ": " + context;
-                        send(userMap[target]->sclient, message.c_str(), (int) message.length(), 0);
+                        SendToClient(userMap[target]->sclient, message.c_str(), (int) message.length(), 0);
                         // 通知客户端消息已发送
-                        send(clientInfo->sclient, "Server: Message sent.", 21, 0);
+                        SendToClient(clientInfo->sclient, "Server: Message sent.", 21, 0);
                     } else {
                         std::cout << "User not found: " << target << std::endl;
                         // 通知客户端用户不存在
-                        send(clientInfo->sclient, "Server: User not found.", 23, 0);
+                        SendToClient(clientInfo->sclient, "Server: User not found.", 23, 0);
                     }
                 }
             } else if (cmd == "CREATE_GROUP") {// 创建群组命令处理
@@ -246,21 +259,21 @@ void ProcessClient(ClientInfo *clientInfo) {
                 if (groupMap.find(groupName) != groupMap.end()) {
                     std::cout << "Group already exists: " << groupName << std::endl;
                     // 通知客户端群组已存在
-                    send(clientInfo->sclient, "Server: Group already exists.", 27, 0);
+                    SendToClient(clientInfo->sclient, "Server: Group already exists.", 27, 0);
                 } else {
                     //创建群xxx
                     groupMap[groupName] = std::vector<ClientInfo *>();
                     groupMap[groupName].push_back(clientInfo);
                     std::cout << "Group created: " << groupName << std::endl;
                     // 通知客户端群组创建成功
-                    send(clientInfo->sclient, "Server: Group created.", 23, 0);
+                    SendToClient(clientInfo->sclient, "Server: Group created.", 23, 0);
                     //广播所有用户群组数量和名字
                     std::string groupList = "Server: Group list: ";
                     for (const auto &pair: groupMap) {
                         groupList += pair.first + " ";
                     }
                     for (auto client: clients) {
-                        send(client->sclient, groupList.c_str(), (int) groupList.length(), 0);
+                        SendToClient(client->sclient, groupList.c_str(), (int) groupList.length(), 0);
                     }
                 }
             } else if (cmd == "JOIN_GROUP") {// 加入群组命令处理
@@ -275,17 +288,17 @@ void ProcessClient(ClientInfo *clientInfo) {
                         groupMap[groupName].end()) {
                         std::cout << "User already in group: " << groupName << std::endl;
                         // 通知客户端用户已在群组中
-                        send(clientInfo->sclient, "Server: User already in group.", 27, 0);
+                        SendToClient(clientInfo->sclient, "Server: User already in group.", 27, 0);
                     } else {
                         groupMap[groupName].push_back(clientInfo);
                         std::cout << "User joined group: " << groupName << std::endl;
                         // 通知客户端加入群组成功
-                        send(clientInfo->sclient, "Server: Joined group.", 21, 0);
+                        SendToClient(clientInfo->sclient, "Server: Joined group.", 21, 0);
                     }
                 } else {
                     std::cout << "Group not found: " << groupName << std::endl;
                     // 通知客户端群组不存在
-                    send(clientInfo->sclient, "Server: Group not found.", 23, 0);
+                    SendToClient(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
             } else if (cmd == "GROUP_CHECK") {// 检查群组成员命令处理
                 //查看群组成员
@@ -298,11 +311,11 @@ void ProcessClient(ClientInfo *clientInfo) {
                     for (auto member: groupMap[groupName]) {
                         groupMembers += member->username + " ";
                     }
-                    send(clientInfo->sclient, groupMembers.c_str(), (int) groupMembers.length(), 0);
+                    SendToClient(clientInfo->sclient, groupMembers.c_str(), (int) groupMembers.length(), 0);
                 } else {
                     std::cout << "Group not found: " << groupName << std::endl;
                     // 通知客户端群组不存在
-                    send(clientInfo->sclient, "Server: Group not found.", 23, 0);
+                    SendToClient(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
             } else if (cmd == "GROUP_MESSAGE") {// 群组消息发送命令处理
                 //群组消息
@@ -321,15 +334,15 @@ void ProcessClient(ClientInfo *clientInfo) {
                         //在消息前加上发送者的用户名
                         message = "(" + groupName + ") " + clientInfo->username + ": " + message;
                         for (auto member: groupMap[groupName]) {
-                            send(member->sclient, message.c_str(), (int) message.length(), 0);
+                            SendToClient(member->sclient, message.c_str(), (int) message.length(), 0);
                         }
                         // 通知客户端消息已发送
-                        send(clientInfo->sclient, "Server: Group message sent.", 27, 0);
+                        SendToClient(clientInfo->sclient, "Server: Group message sent.", 27, 0);
                     }
                 } else {
                     std::cout << "Group not found: " << groupName << std::endl;
                     // 通知客户端群组不存在
-                    send(clientInfo->sclient, "Server: Group not found.", 23, 0);
+                    SendToClient(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
             } else if (cmd == "REMOVE") {// 移除用户命令处理
                 {
@@ -342,7 +355,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                         userList += pair.first + " ";
                     }
                     for (auto client: clients) {
-                        send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                        SendToClient(client->sclient, userList.c_str(), (int) userList.length(), 0);
                     }
                 }
             }
@@ -361,7 +374,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     userList += pair.first + " ";
                 }
                 for (auto client: clients) {
-                    send(client->sclient, userList.c_str(), (int) userList.length(), 0);
+                    SendToClient(client->sclient, userList.c_str(), (int) userList.length(), 0);
                 }
             }
             break;
@@ -389,7 +402,7 @@ DWORD WINAPI KeyboardThread(LPVOID) {
         std::lock_guard<std::mutex> lock(connectionMutex);
         for (auto client: clients) {
             std::cout << "Sending to [" << client->id << "]: " << input << std::endl;
-            send(client->sclient, input, (int) strlen(input), 0);
+            SendToClient(client->sclient, input, (int) strlen(input), 0);
         }
     }
     return 0;
