@@ -222,8 +222,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                         send(clientInfo->sclient, "Server: User not found.", 23, 0);
                     }
                 }
-            }
-            else if (cmd == "CREATE_GROUP"){
+            } else if (cmd == "CREATE_GROUP") {
                 //创建群组
                 token = strtok_s(nullptr, " ", &context);
                 std::string groupName(token);
@@ -248,8 +247,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                         send(client->sclient, groupList.c_str(), (int) groupList.length(), 0);
                     }
                 }
-            }
-            else if (cmd == "JOIN_GROUP"){
+            } else if (cmd == "JOIN_GROUP") {
                 //加入群组
                 token = strtok_s(nullptr, " ", &context);
                 token = strtok_s(nullptr, " ", &context);
@@ -257,7 +255,8 @@ void ProcessClient(ClientInfo *clientInfo) {
                 //检查群组是否存在
                 if (groupMap.find(groupName) != groupMap.end()) {
                     //检查用户是否已在群组中
-                    if (std::find(groupMap[groupName].begin(), groupMap[groupName].end(), clientInfo) != groupMap[groupName].end()) {
+                    if (std::find(groupMap[groupName].begin(), groupMap[groupName].end(), clientInfo) !=
+                        groupMap[groupName].end()) {
                         std::cout << "User already in group: " << groupName << std::endl;
                         // 通知客户端用户已在群组中
                         send(clientInfo->sclient, "Server: User already in group.", 27, 0);
@@ -272,11 +271,10 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            }
-            else if(cmd =="GROUP_CHECK"){
+            } else if (cmd == "GROUP_CHECK") {
                 //查看群组成员
                 token = strtok_s(nullptr, " ", &context);
-                std::cout<<token<<std::endl;
+                std::cout << token << std::endl;
                 std::string groupName(token);
                 //查看群组是否存在并输出成员名称
                 if (groupMap.find(groupName) != groupMap.end()) {
@@ -290,22 +288,22 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            }
-            else if (cmd == "GROUP_MESSAGE"){
+            } else if (cmd == "GROUP_MESSAGE") {
                 //群组消息
                 token = strtok_s(nullptr, " ", &context);
                 token = strtok_s(nullptr, " ", &context);
-                std::cout<<token<<std::endl;
+                std::cout << token << std::endl;
                 std::string groupName(token);
                 token = strtok_s(nullptr, " ", &context);
-                std::cout<<token<<std::endl;
+                std::cout << token << std::endl;
                 std::string message(token);
                 //检查群组是否存在
                 if (groupMap.find(groupName) != groupMap.end()) {
                     //检查用户是否在群组中
-                    if (std::find(groupMap[groupName].begin(), groupMap[groupName].end(), clientInfo) != groupMap[groupName].end()) {
+                    if (std::find(groupMap[groupName].begin(), groupMap[groupName].end(), clientInfo) !=
+                        groupMap[groupName].end()) {
                         //在消息前加上发送者的用户名
-                        message ="("+ groupName +") "+clientInfo->username + ": " + message;
+                        message = "(" + groupName + ") " + clientInfo->username + ": " + message;
                         for (auto member: groupMap[groupName]) {
                             send(member->sclient, message.c_str(), (int) message.length(), 0);
                         }
@@ -317,8 +315,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            }
-            else if (cmd == "REMOVE") {
+            } else if (cmd == "REMOVE") {
                 {
                     std::lock_guard<std::mutex> lock(connectionMutex);
                     userMap.erase(clientInfo->username);
@@ -333,8 +330,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     }
                 }
             }
-        }
-        else {
+        } else {
             // 客户端断开连接
             std::cout << "Client [" << clientInfo->id << "] disconnected." << std::endl;
             {
