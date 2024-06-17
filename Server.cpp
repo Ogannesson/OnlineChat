@@ -206,7 +206,6 @@ void ProcessClient(ClientInfo *clientInfo) {
                 token = strtok_s(nullptr, " ", &context);
                 std::string target(token);
                 std::string message(context);
-
                 if (target == "SERVER") {
                     std::cout << "Message to SERVER: " << message << std::endl;
                 } else {
@@ -306,7 +305,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     //检查用户是否在群组中
                     if (std::find(groupMap[groupName].begin(), groupMap[groupName].end(), clientInfo) != groupMap[groupName].end()) {
                         //在消息前加上发送者的用户名
-                        message = clientInfo->username + ": " + message;
+                        message ="("+ groupName +") "+clientInfo->username + ": " + message;
                         for (auto member: groupMap[groupName]) {
                             send(member->sclient, message.c_str(), (int) message.length(), 0);
                         }

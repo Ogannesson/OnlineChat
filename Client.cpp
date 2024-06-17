@@ -118,9 +118,13 @@ int main(int argc, char **argv) {
             send(sHost, groupMessage.c_str(), (int) groupMessage.size(), 0);
         }
         else if (input.substr(0, 4) == "join") {
-            std::string groupName = input; // 假设输入格式为 "join group_name"
+            const std::string& groupName = input;
             std::string joinGroupMessage = "JOIN_GROUP " + groupName;
             send(sHost, joinGroupMessage.c_str(), (int) joinGroupMessage.size(), 0);
+        }
+        else if(input==""){
+            //输入格式有误
+            std::cout << "Invalid input!" << std::endl;
         }
         else {
             std::string message = "MESSAGE " + input;
