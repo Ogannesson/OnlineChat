@@ -114,6 +114,10 @@ int main(int argc, char **argv) {
     std::thread receiverThread(receiveMessages, sHost);
 
     std::string input;
+
+    //清空输入缓冲区
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
     // 主循环，接收和处理用户输入
     while (true) {
         std::getline(std::cin, input);

@@ -9,8 +9,12 @@
 #include <unordered_map>
 #include <string>
 
+// 定义缓冲区大小
 #define BUF_SIZE 4096
 
+/**
+ * 客户端信息结构体，包含客户端的ID、套接字、地址、重叠结构体和缓冲区
+ */
 struct ClientInfo {
     int id{};
     SOCKET sclient{};
@@ -20,10 +24,15 @@ struct ClientInfo {
     std::string username;  // 新增用户名字段
 };
 
+// 全局互斥锁，用于线程安全访问
 std::mutex connectionMutex;
+// 连接计数器，原子类型，用于线程安全操作
 std::atomic<int> connectionCount(0);
+// 下一个客户端ID，原子类型，用于线程安全操作
 std::atomic<int> nextClientId(1);
+// 客户端列表，存储客户端信息指针
 std::vector<ClientInfo *> clients;
+// 用户名到客户端信息的映射，用于快速查找
 std::unordered_map<std::string, ClientInfo *> userMap;  // 用户名与ClientInfo的映射
 //群组与ClientInfo的映射
 std::unordered_map<std::string, std::vector<ClientInfo *>> groupMap;
@@ -31,8 +40,10 @@ std::unordered_map<std::string, std::vector<ClientInfo *>> groupMap;
 // 函数声明
 void ProcessClient(ClientInfo *clientInfo);
 
+// 键盘输入线程函数，用于接收控制台输入并发送给所有客户端
 DWORD WINAPI KeyboardThread(LPVOID);
 
+// 清理函数，用于关闭套接字和释放资源
 void Cleanup();
 
 int main() {
@@ -114,6 +125,10 @@ int main() {
     return 0;
 }
 
+/**
+ * 处理客户端连接的函数，每个客户端连接都会创建一个线程调用此函数
+ * @param clientInfo 客户端信息指针
+ */
 void ProcessClient(ClientInfo *clientInfo) {
     // 创建事件对象并关联到OVERLAPPED结构体
     clientInfo->overlapped.hEvent = WSACreateEvent();
@@ -174,6 +189,7 @@ void ProcessClient(ClientInfo *clientInfo) {
             token = strtok_s(clientInfo->buf, " ", &context);
             std::string cmd(token);
 
+            // 注册命令处理
             if (cmd == "REGISTER") {
                 token = strtok_s(nullptr, " ", &context); // 第二段
                 if (strcmp(token, "SERVER") == 0) { // 验证是否为 "SERVER"
@@ -202,7 +218,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端注册失败
                     send(clientInfo->sclient, "Server: Invalid registration command format.", 41, 0);
                 }
-            } else if (cmd == "MESSAGE") {
+            } else if (cmd == "MESSAGE") {// 消息发送命令处理
                 token = strtok_s(nullptr, " ", &context);
                 std::string target(token);
                 std::string message(context);
@@ -222,7 +238,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                         send(clientInfo->sclient, "Server: User not found.", 23, 0);
                     }
                 }
-            } else if (cmd == "CREATE_GROUP") {
+            } else if (cmd == "CREATE_GROUP") {// 创建群组命令处理
                 //创建群组
                 token = strtok_s(nullptr, " ", &context);
                 std::string groupName(token);
@@ -247,7 +263,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                         send(client->sclient, groupList.c_str(), (int) groupList.length(), 0);
                     }
                 }
-            } else if (cmd == "JOIN_GROUP") {
+            } else if (cmd == "JOIN_GROUP") {// 加入群组命令处理
                 //加入群组
                 token = strtok_s(nullptr, " ", &context);
                 token = strtok_s(nullptr, " ", &context);
@@ -271,7 +287,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            } else if (cmd == "GROUP_CHECK") {
+            } else if (cmd == "GROUP_CHECK") {// 检查群组成员命令处理
                 //查看群组成员
                 token = strtok_s(nullptr, " ", &context);
                 std::cout << token << std::endl;
@@ -288,7 +304,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            } else if (cmd == "GROUP_MESSAGE") {
+            } else if (cmd == "GROUP_MESSAGE") {// 群组消息发送命令处理
                 //群组消息
                 token = strtok_s(nullptr, " ", &context);
                 token = strtok_s(nullptr, " ", &context);
@@ -315,7 +331,7 @@ void ProcessClient(ClientInfo *clientInfo) {
                     // 通知客户端群组不存在
                     send(clientInfo->sclient, "Server: Group not found.", 23, 0);
                 }
-            } else if (cmd == "REMOVE") {
+            } else if (cmd == "REMOVE") {// 移除用户命令处理
                 {
                     std::lock_guard<std::mutex> lock(connectionMutex);
                     userMap.erase(clientInfo->username);
@@ -363,7 +379,7 @@ void ProcessClient(ClientInfo *clientInfo) {
 
     delete clientInfo;
 }
-
+// 键盘输入线程实现，允许服务器通过控制台向所有客户端发送消息
 DWORD WINAPI KeyboardThread(LPVOID) {
     char input[BUF_SIZE];
     while (true) {
@@ -378,7 +394,7 @@ DWORD WINAPI KeyboardThread(LPVOID) {
     }
     return 0;
 }
-
+// 清理资源，确保程序退出时释放所有资源
 void Cleanup() {
     // 关闭所有客户端连接
     std::lock_guard<std::mutex> lock(connectionMutex);
@@ -389,6 +405,5 @@ void Cleanup() {
     clients.clear();
     userMap.clear();  // 清理用户映射
 
-    // 关闭服务器套接字
-    WSACleanup();
+    WSACleanup();// 关闭服务器套接字
 }
